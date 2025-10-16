@@ -1,0 +1,385 @@
+pip install langchain langchain-google-genai langchain-core pydantic
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
+from pydantic import BaseModel, Field  # Updated import
+from langchain_google_genai import ChatGoogleGenerativeAI  # Using Gemini
+from langchain.agents import create_openai_functions_agent, AgentExecutor
+from langchain_core.tools import Tool
+from langchain_core.messages import SystemMessage
+from typing import List, Optional
+import json
+import os
+
+# Set your Gemini API key here
+GEMINI_API_KEY = "AIzaSyDu61_VRLto6Y_n7R4SGcjGg_5oUQFhMo4"  # Replace with your actual API key
+os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+
+# Define Pydantic models for structured output
+class PersonInfo(BaseModel):
+    """Information about a person."""
+    name: str = Field(description="Full name of the person")
+    age: Optional[int] = Field(description="Age of the person")
+    occupation: str = Field(description="Person's job or profession")
+    skills: List[str] = Field(description="List of skills or competencies")
+    location: Optional[str] = Field(description="Current location or city")
+
+class TaskAnalysis(BaseModel):
+    """Analysis of a task or project."""
+    task_name: str = Field(description="Name or title of the task")
+    difficulty: str = Field(description="Difficulty level: easy, medium, hard")
+    estimated_hours: int = Field(description="Estimated hours to complete")
+    required_skills: List[str] = Field(description="Skills needed for this task")
+    priority: str = Field(description="Priority level: low, medium, high")
+
+# Method 1: Using JsonOutputParser with explicit schema
+def create_json_parser_agent():
+    """Create an agent that returns JSON structured responses."""
+
+    # Define the LLM (Gemini Flash 1.5)
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0,
+        google_api_key=GEMINI_API_KEY
+    )
+
+    # Create JSON parser
+    json_parser = JsonOutputParser(pydantic_object=PersonInfo)
+
+    # Create prompt template
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant that extracts person information. {format_instructions}"),
+        ("human", "{input}")
+    ])
+
+    # Create the chain
+    chain = prompt | llm | json_parser
+
+    return chain, json_parser.get_format_instructions()
+
+# Method 2: Using PydanticOutputParser
+def create_pydantic_parser_agent():
+    """Create an agent using Pydantic parser for structured output."""
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0,
+        google_api_key=GEMINI_API_KEY
+    )
+
+    # Create Pydantic parser
+    pydantic_parser = PydanticOutputParser(pydantic_object=TaskAnalysis)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a project manager assistant. Analyze the given task and provide structured information. {format_instructions}"),
+        ("human", "{input}")
+    ])
+
+    chain = prompt | llm | pydantic_parser
+
+    return chain, pydantic_parser.get_format_instructions()
+
+# Method 3: Simple tool-based approach (without OpenAI functions agent)
+def analyze_person_tool(input_text: str) -> str:
+    """Tool that analyzes person information from text."""
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0,
+        google_api_key=GEMINI_API_KEY
+    )
+    parser = PydanticOutputParser(pydantic_object=PersonInfo)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Extract person information from the following text. {format_instructions}"),
+        ("human", "{input}")
+    ])
+
+    chain = prompt | llm | parser
+
+    try:
+        result = chain.invoke({
+            "input": input_text,
+            "format_instructions": parser.get_format_instructions()
+        })
+        return json.dumps(result.dict(), indent=2)
+    except Exception as e:
+        return f"Error processing input: {str(e)}"
+
+def analyze_task_tool(input_text: str) -> str:
+    """Tool that analyzes task information from text."""
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0,
+        google_api_key=GEMINI_API_KEY
+    )
+    parser = PydanticOutputParser(pydantic_object=TaskAnalysis)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Analyze the following task description and provide structured analysis. {format_instructions}"),
+        ("human", "{input}")
+    ])
+
+    chain = prompt | llm | parser
+
+    try:
+        result = chain.invoke({
+            "input": input_text,
+            "format_instructions": parser.get_format_instructions()
+        })
+        return json.dumps(result.dict(), indent=2)
+    except Exception as e:
+        return f"Error processing input: {str(e)}"
+
+# Simplified multi-tool approach without OpenAI functions
+class SimpleStructuredAgent:
+    """A simple agent that can handle multiple types of structured analysis."""
+
+    def __init__(self):
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            temperature=0,
+            google_api_key=GEMINI_API_KEY
+        )
+
+    def analyze_person(self, input_text: str) -> PersonInfo:
+        """Analyze person information from text."""
+        parser = PydanticOutputParser(pydantic_object=PersonInfo)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Extract person information from the following text. {format_instructions}"),
+            ("human", "{input}")
+        ])
+
+        chain = prompt | self.llm | parser
+
+        return chain.invoke({
+            "input": input_text,
+            "format_instructions": parser.get_format_instructions()
+        })
+
+    def analyze_task(self, input_text: str) -> TaskAnalysis:
+        """Analyze task information from text."""
+        parser = PydanticOutputParser(pydantic_object=TaskAnalysis)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Analyze the following task description and provide structured analysis. {format_instructions}"),
+            ("human", "{input}")
+        ])
+
+        chain = prompt | self.llm | parser
+
+        return chain.invoke({
+            "input": input_text,
+            "format_instructions": parser.get_format_instructions()
+        })
+
+    def auto_analyze(self, input_text: str):
+        """Automatically determine what type of analysis to perform."""
+        # Simple keyword-based detection
+        person_keywords = ['age', 'years old', 'engineer', 'manager', 'developer', 'skills', 'experience', 'works', 'job']
+        task_keywords = ['build', 'create', 'develop', 'project', 'application', 'system', 'features', 'requirements']
+
+        text_lower = input_text.lower()
+        person_score = sum(1 for keyword in person_keywords if keyword in text_lower)
+        task_score = sum(1 for keyword in task_keywords if keyword in text_lower)
+
+        if person_score > task_score:
+            print("Detected: Person information")
+            return self.analyze_person(input_text)
+        else:
+            print("Detected: Task information")
+            return self.analyze_task(input_text)
+
+# Example usage functions
+def demo_json_parser():
+    """Demonstrate JSON parser approach."""
+    print("=== JSON Parser Demo ===")
+    chain, format_instructions = create_json_parser_agent()
+
+    input_text = "John Doe is a 30-year-old software engineer living in San Francisco. He specializes in Python, machine learning, and web development."
+
+    try:
+        result = chain.invoke({
+            "input": input_text,
+            "format_instructions": format_instructions
+        })
+        print("Result:")
+        print(json.dumps(result, indent=2))
+    except Exception as e:
+        print(f"Error: {e}")
+
+def demo_pydantic_parser():
+    """Demonstrate Pydantic parser approach."""
+    print("\n=== Pydantic Parser Demo ===")
+    chain, format_instructions = create_pydantic_parser_agent()
+
+    input_text = "Build a web application for managing customer orders. This should include user authentication, order processing, and inventory management."
+
+    try:
+        result = chain.invoke({
+            "input": input_text,
+            "format_instructions": format_instructions
+        })
+        print("Result:")
+        print(f"Task: {result.task_name}")
+        print(f"Difficulty: {result.difficulty}")
+        print(f"Estimated Hours: {result.estimated_hours}")
+        print(f"Required Skills: {', '.join(result.required_skills)}")
+        print(f"Priority: {result.priority}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+def demo_simple_agent():
+    """Demonstrate simplified agent approach."""
+    print("\n=== Simple Structured Agent Demo ===")
+    agent = SimpleStructuredAgent()
+
+    # Test with person information
+    person_input = "Sarah Johnson is a 28-year-old data scientist from Boston. She has expertise in Python, R, statistical analysis, and machine learning algorithms."
+
+    print("Analyzing person information...")
+    try:
+        result1 = agent.analyze_person(person_input)
+        print("Person Analysis Result:")
+        print(f"Name: {result1.name}")
+        print(f"Age: {result1.age}")
+        print(f"Occupation: {result1.occupation}")
+        print(f"Skills: {', '.join(result1.skills)}")
+        print(f"Location: {result1.location}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+    # Test with task information
+    task_input = "Create a mobile app for fitness tracking with features like workout logging, progress charts, and social sharing. This is a high-priority project for our startup."
+
+    print("\nAnalyzing task information...")
+    try:
+        result2 = agent.analyze_task(task_input)
+        print("Task Analysis Result:")
+        print(f"Task: {result2.task_name}")
+        print(f"Difficulty: {result2.difficulty}")
+        print(f"Estimated Hours: {result2.estimated_hours}")
+        print(f"Required Skills: {', '.join(result2.required_skills)}")
+        print(f"Priority: {result2.priority}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+def demo_auto_analysis():
+    """Demonstrate automatic analysis type detection."""
+    print("\n=== Auto Analysis Demo ===")
+    agent = SimpleStructuredAgent()
+
+    inputs = [
+        "Mike Chen is a 35-year-old product manager in Seattle who knows Agile, user research, and data analysis.",
+        "Develop a real-time chat application with end-to-end encryption, file sharing, and video calls for our company."
+    ]
+
+    for i, input_text in enumerate(inputs, 1):
+        print(f"\nTest {i}: {input_text[:50]}...")
+        try:
+            result = agent.auto_analyze(input_text)
+            if isinstance(result, PersonInfo):
+                print(f"Result: {result.name} - {result.occupation}")
+            elif isinstance(result, TaskAnalysis):
+                print(f"Result: {result.task_name} - {result.difficulty} difficulty")
+        except Exception as e:
+            print(f"Error: {e}")
+
+# Alternative: Simple structured response without agents
+class SimpleStructuredLLM:
+    """A simple class for getting structured responses."""
+
+    def __init__(self, model="gemini-1.5-flash"):
+        self.llm = ChatGoogleGenerativeAI(
+            model=model,
+            temperature=0,
+            google_api_key=GEMINI_API_KEY
+        )
+
+    def get_structured_response(self, input_text: str, response_model: BaseModel):
+        """Get structured response using any Pydantic model."""
+        parser = PydanticOutputParser(pydantic_object=response_model)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant. Please provide a structured response. {format_instructions}"),
+            ("human", "{input}")
+        ])
+
+        chain = prompt | self.llm | parser
+
+        return chain.invoke({
+            "input": input_text,
+            "format_instructions": parser.get_format_instructions()
+        })
+
+# Example of using the simple structured LLM
+def demo_simple_structured():
+    """Demonstrate the simple structured LLM approach."""
+    print("\n=== Simple Structured LLM Demo ===")
+
+    structured_llm = SimpleStructuredLLM()
+
+    # Use with PersonInfo model
+    input_text = "Alice Wang is a 32-year-old UX designer in New York who specializes in user research, prototyping, and accessibility design."
+
+    try:
+        result = structured_llm.get_structured_response(input_text, PersonInfo)
+        print("Structured Person Info:")
+        print(f"Name: {result.name}")
+        print(f"Age: {result.age}")
+        print(f"Occupation: {result.occupation}")
+        print(f"Skills: {result.skills}")
+        print(f"Location: {result.location}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+# Main execution
+if __name__ == "__main__":
+    print("LangChain Structured Response Agent Examples with Gemini Flash 1.5")
+    print("=" * 65)
+
+    # Check if API key is set
+    if GEMINI_API_KEY == "your-gemini-api-key-here":
+        print("⚠️  Please replace 'your-gemini-api-key-here' with your actual Gemini API key!")
+        print("Get your API key from: https://makersuite.google.com/app/apikey")
+        exit()
+
+    # Run demonstrations
+    demo_json_parser()
+    demo_pydantic_parser()
+    demo_simple_agent()
+    demo_auto_analysis()
+    demo_simple_structured()
+
+# Additional usage example
+def create_custom_structured_response():
+    """Example of creating a custom structured response model."""
+
+    class ProductReview(BaseModel):
+        """Product review analysis."""
+        product_name: str = Field(description="Name of the product")
+        rating: int = Field(description="Rating out of 5", ge=1, le=5)
+        sentiment: str = Field(description="Overall sentiment: positive, negative, neutral")
+        pros: List[str] = Field(description="List of positive aspects")
+        cons: List[str] = Field(description="List of negative aspects")
+        recommendation: bool = Field(description="Whether the reviewer recommends the product")
+
+    # Use the custom model
+    llm = SimpleStructuredLLM()
+    review_text = """
+    I bought this wireless headphone last month and I'm really impressed.
+    The sound quality is excellent and the battery life lasts all day.
+    However, the build quality feels a bit cheap and it's not very comfortable for long sessions.
+    Overall, I'd give it 4 out of 5 stars and would recommend it for the price.
+    """
+
+    try:
+        result = llm.get_structured_response(review_text, ProductReview)
+        print("\n=== Custom Product Review Analysis ===")
+        print(f"Product: {result.product_name}")
+        print(f"Rating: {result.rating}/5")
+        print(f"Sentiment: {result.sentiment}")
+        print(f"Pros: {', '.join(result.pros)}")
+        print(f"Cons: {', '.join(result.cons)}")
+        print(f"Recommended: {result.recommendation}")
+    except Exception as e:
+        print(f"Error in custom analysis: {e}")
