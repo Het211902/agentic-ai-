@@ -1,0 +1,328 @@
+import asyncio
+from playwright.async_api import async_playwright
+from langchain_core.tools import Tool
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.prompts import PromptTemplate
+import urllib.parse
+
+# Direct Gemini API key (replace this with your actual key)
+GEMINI_API_KEY = "AIzaSyDu61_VRLto6Y_n7R4SGcjGg_5oUQFhMo4"
+
+if not GEMINI_API_KEY:
+    raise ValueError("❌ Please set your Gemini API key in the code.")
+
+# LangChain LLM setup using Gemini
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash",  # Updated model name
+    google_api_key=GEMINI_API_KEY,
+    temperature=0.1
+)
+
+# Smart hashtag generator (no browser required)
+def generate_smart_hashtags(keyword: str) -> str:
+    """Generate comprehensive hashtags for a keyword using AI logic"""
+
+    # Base hashtag patterns
+    base_hashtags = [
+        f"#{keyword.lower()}",
+        f"#{keyword.lower()}s",
+    ]
+
+    # Category-specific hashtags
+    hashtag_categories = {
+        'fashion': ['ootd', 'style', 'fashion', 'outfit', 'look', 'wear', 'clothing', 'fashionista', 'styleinspo', 'trendy'],
+        'fitness': ['workout', 'gym', 'fit', 'health', 'training', 'exercise', 'bodybuilding', 'cardio', 'strength', 'wellness'],
+        'food': ['foodie', 'delicious', 'yummy', 'recipe', 'cooking', 'chef', 'tasty', 'homemade', 'foodporn', 'instafood'],
+        'travel': ['wanderlust', 'adventure', 'explore', 'vacation', 'trip', 'journey', 'discover', 'traveling', 'backpacking', 'tourism'],
+        'beauty': ['makeup', 'skincare', 'beauty', 'cosmetics', 'glam', 'selfcare', 'beautyblogger', 'makeupartist', 'skincareroutine', 'natural'],
+        'lifestyle': ['life', 'daily', 'mood', 'vibes', 'inspiration', 'motivation', 'goals', 'mindset', 'positivity', 'happiness'],
+        'business': ['entrepreneur', 'business', 'success', 'hustle', 'leadership', 'startup', 'growth', 'marketing', 'sales', 'productivity'],
+        'art': ['art', 'creative', 'design', 'artist', 'painting', 'drawing', 'artwork', 'illustration', 'creativity', 'artistic'],
+        'photography': ['photography', 'photo', 'photographer', 'photoshoot', 'camera', 'portrait', 'landscape', 'art', 'capture', 'moment'],
+        'nature': ['nature', 'outdoor', 'hiking', 'mountains', 'forest', 'wildlife', 'landscape', 'sunset', 'ocean', 'environment']
+    }
+
+    # Determine category based on keyword
+    detected_categories = []
+    keyword_lower = keyword.lower()
+
+    for category, tags in hashtag_categories.items():
+        if keyword_lower in tags or any(tag in keyword_lower for tag in tags):
+            detected_categories.append(category)
+
+    # If no specific category detected, use lifestyle as default
+    if not detected_categories:
+        detected_categories = ['lifestyle']
+
+    # Generate hashtags
+    generated_hashtags = set(base_hashtags)
+
+    # Add category-specific hashtags
+    for category in detected_categories[:2]:  # Max 2 categories
+        category_tags = hashtag_categories[category]
+        for tag in category_tags[:8]:  # Max 8 per category
+            generated_hashtags.add(f"#{tag}")
+            if len(keyword) > 3:
+                generated_hashtags.add(f"#{keyword.lower()}{tag}")
+
+    # Add common Instagram hashtags
+    common_hashtags = [
+        '#instadaily', '#photooftheday', '#instagood', '#love', '#beautiful',
+        '#happy', '#follow', '#like4like', '#instamood', '#picoftheday',
+        '#instagram', '#amazing', '#smile', '#fun', '#friends'
+    ]
+
+    # Add some common hashtags
+    for hashtag in common_hashtags[:5]:
+        generated_hashtags.add(hashtag)
+
+    # Convert to list and limit
+    final_hashtags = list(generated_hashtags)[:25]
+
+    return f"🏷️ Generated hashtags for '{keyword}':\n" + "\n".join(sorted(final_hashtags))
+
+# Asynchronous Instagram hashtag scraping tool (with fallback)
+async def scrape_instagram_hashtags(keyword: str) -> str:
+    """Try to scrape Instagram hashtags, fallback to smart generation"""
+
+    # First try to use browser scraping
+    try:
+        async with async_playwright() as p:
+            # Try to launch browser
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            )
+            page = await context.new_page()
+
+            # Encode the keyword for URL
+            encoded_keyword = urllib.parse.quote(keyword)
+            query = f"site:instagram.com #{encoded_keyword}"
+            search_url = f"https://www.google.com/search?q={query}&num=20"
+
+            print(f"🔍 Scraping from Google search...")
+
+            await page.goto(search_url, timeout=10000)
+            await page.wait_for_timeout(2000)
+
+            hashtags = []
+            # Try multiple selectors for Google search results
+            selectors = ["h3", ".BNeawe", "span", "div"]
+
+            for selector in selectors:
+                elements = await page.query_selector_all(selector)
+                for el in elements[:20]:  # Limit elements to check
+                    try:
+                        text = await el.inner_text()
+                        words = text.split()
+                        for word in words:
+                            if word.startswith("#") and len(word) > 2:
+                                clean_hashtag = word.strip('.,!?;:"()[]{}').lower()
+                                if clean_hashtag.startswith("#"):
+                                    hashtags.append(clean_hashtag)
+                    except:
+                        continue
+
+            await browser.close()
+
+            if hashtags:
+                unique_hashtags = list(set(hashtags))[:15]
+                return f"🏷️ Scraped hashtags for '{keyword}':\n" + "\n".join(unique_hashtags)
+
+    except Exception as e:
+        print(f"⚠️ Browser scraping failed: Playwright not installed properly")
+        print("💡 Falling back to smart hashtag generation...")
+
+    # Fallback to smart generation
+    return generate_smart_hashtags(keyword)
+
+# Wrapper function for the tool (with browser-free option)
+def scrape_hashtags_sync(keyword: str) -> str:
+    """Synchronous wrapper - tries browser scraping first, falls back to smart generation"""
+    try:
+        # Check if Playwright is properly installed
+        try:
+            from playwright.sync_api import sync_playwright
+            # Quick test to see if browsers are installed
+            with sync_playwright() as p:
+                browser_test = p.chromium.launch(headless=True)
+                browser_test.close()
+                print("✅ Playwright browsers detected - attempting scrape...")
+        except Exception as browser_error:
+            print("⚠️ Playwright browsers not found - using smart generation...")
+            return generate_smart_hashtags(keyword)
+
+        # Try async scraping
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, scrape_instagram_hashtags(keyword))
+                return future.result()
+        else:
+            return asyncio.run(scrape_instagram_hashtags(keyword))
+
+    except Exception as e:
+        print(f"⚠️ Scraping failed, using smart generation: {str(e)}")
+        return generate_smart_hashtags(keyword)
+
+# Define the scraping tool
+scrape_tool = Tool(
+    name="InstagramHashtagScraper",
+    description="Scrapes Instagram hashtags for a given keyword. Input should be a single keyword or phrase.",
+    func=scrape_hashtags_sync,
+)
+
+# Create the prompt template
+prompt_template = """You are a helpful Instagram hashtag research assistant. You have access to tools to help users find relevant hashtags.
+
+TOOLS:
+------
+You have access to the following tools:
+{tools}
+
+To use a tool, please use the following format:
+
+```
+Thought: Do I need to use a tool? Yes
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+```
+
+When you have a response to say to the Human, or if you do not need to use a tool, you MUST use the format:
+
+```
+Thought: Do I need to use a tool? No
+Final Answer: [your response here]
+```
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+
+prompt = PromptTemplate.from_template(prompt_template)
+
+# Create the agent
+agent = create_react_agent(llm, [scrape_tool], prompt)
+
+# Create the agent executor
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=[scrape_tool],
+    verbose=True,
+    handle_parsing_errors=True,
+    max_iterations=3
+)
+
+# Main application
+async def run_agent_task():
+    print("🚀 InstaGrowth AI Agent Ready!")
+    print("💡 This tool helps you find Instagram hashtags for your content")
+    print("-" * 50)
+
+    while True:
+        try:
+            keyword = input("\n📝 Enter a keyword to find Instagram hashtags (or type 'exit' to quit): ").strip()
+
+            if keyword.lower() == "exit":
+                print("👋 Goodbye!")
+                break
+
+            if not keyword:
+                print("⚠️ Please enter a valid keyword")
+                continue
+
+            print(f"\n🔄 Processing keyword: '{keyword}'...")
+
+            # Run the agent
+            response = agent_executor.invoke({
+                "input": f"Find Instagram hashtags related to '{keyword}'. Provide a comprehensive list of relevant hashtags that content creators can use."
+            })
+
+            print("\n✅ Result:")
+            print("=" * 50)
+            print(response['output'])
+            print("=" * 50)
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n❌ An error occurred: {str(e)}")
+            print("🔄 Please try again with a different keyword")
+
+# Synchronous version for Jupyter compatibility
+def run_agent_sync():
+    print("🚀 InstaGrowth AI Agent Ready!")
+    print("💡 This tool helps you find Instagram hashtags for your content")
+    print("-" * 50)
+
+    while True:
+        try:
+            keyword = input("\n📝 Enter a keyword to find Instagram hashtags (or type 'exit' to quit): ").strip()
+
+            if keyword.lower() == "exit":
+                print("👋 Goodbye!")
+                break
+
+            if not keyword:
+                print("⚠️ Please enter a valid keyword")
+                continue
+
+            print(f"\n🔄 Processing keyword: '{keyword}'...")
+
+            # Run the agent
+            response = agent_executor.invoke({
+                "input": f"Find Instagram hashtags related to '{keyword}'. Provide a comprehensive list of relevant hashtags that content creators can use."
+            })
+
+            print("\n✅ Result:")
+            print("=" * 50)
+            print(response['output'])
+            print("=" * 50)
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"\n❌ An error occurred: {str(e)}")
+            print("🔄 Please try again with a different keyword")
+
+# Detect if we're in Jupyter/IPython environment
+def is_jupyter():
+    try:
+        from IPython import get_ipython
+        return get_ipython() is not None
+    except ImportError:
+        return False
+
+# Run the app
+if __name__ == "__main__":
+    # Install required packages message
+    print("📦 Make sure you have installed the required packages:")
+    print("pip install playwright langchain langchain-google-genai nest-asyncio")
+    print("playwright install chromium")
+    print("-" * 50)
+
+    try:
+        if is_jupyter():
+            # Running in Colab/IPython - use synchronous version
+            print("🔄 Detected Colab environment - using sync mode...")
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()  # Allow nested event loops
+            except ImportError:
+                print("⚠️ Installing nest-asyncio: pip install nest-asyncio")
+            run_agent_sync()
+        else:
+            # Running in regular Python - use asyncio.run()
+            asyncio.run(run_agent_task())
+    except KeyboardInterrupt:
+        print("\n👋 Application terminated by user")
+    except Exception as e:
+        print(f"\n❌ Fatal error: {str(e)}")
+        print("💡 Try running: pip install nest-asyncio")
+
