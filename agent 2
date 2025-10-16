@@ -1,0 +1,167 @@
+import asyncio
+import json
+import time
+from datetime import datetime
+from typing import List, Dict, Any
+import pandas as pd
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.schema import HumanMessage, SystemMessage
+from dataclasses import dataclass, asdict
+
+# Replace with your actual Google API key
+GOOGLE_API_KEY = "AIzaSyDu61_VRLto6Y_n7R4SGcjGg_5oUQFhMo4"
+
+@dataclass
+class TestResult:
+    """Data class to store LLM test results"""
+    prompt_type: str  # "User Only" or "User + System"
+    user_prompt: str
+    response: str
+    response_time: float
+    timestamp: str
+    word_count: int
+    character_count: int
+
+class ComparativeTester:
+    """Class to handle comparative LLM testing"""
+
+    def __init__(self, model_name: str = "gemini-1.5-flash"):
+        import os
+        os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+
+        self.llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        self.results: List[TestResult] = []
+
+    async def get_response(self, user_prompt: str, system_prompt: str = None) -> TestResult:
+        """Get LLM response with optional system prompt"""
+        start_time = time.time()
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+            prompt_type = "User + System"
+        else:
+            prompt_type = "User Only"
+
+        messages.append(HumanMessage(content=user_prompt))
+        response = await self.llm.ainvoke(messages)
+        end_time = time.time()
+
+        result = TestResult(
+            prompt_type=prompt_type,
+            user_prompt=user_prompt,
+            response=response.content,
+            response_time=end_time - start_time,
+            timestamp=datetime.now().isoformat(),
+            word_count=len(response.content.split()),
+            character_count=len(response.content)
+        )
+
+        self.results.append(result)
+        return result
+
+    async def run_tests(self, user_prompts: List[str], system_prompt: str = None):
+        """Run batch tests"""
+        tasks = [self.get_response(prompt, system_prompt) for prompt in user_prompts]
+        await asyncio.gather(*tasks)
+
+    def display_results(self):
+        """Print results in console-friendly format"""
+        scenario = "User + System Prompt" if any(r.prompt_type == "User + System" for r in self.results) else "User Prompt Only"
+        print(f"\nStarting LLM {scenario} Testing")
+        print("="*60)
+
+        for i, r in enumerate(self.results, 1):
+            print(f"\nTest {i}:")
+            print(f"Prompt Type: {r.prompt_type}")
+            print(f"User Prompt: {r.user_prompt}")
+            print(f"Response Time: {r.response_time:.3f}s")
+            print(f"Word Count: {r.word_count}")
+            print(f"Response Preview: {r.response[:150]}...")
+            print("-"*50)
+
+    def analyze_results(self):
+        """Analyze results by scenario"""
+        analysis = {}
+        for scenario in ["User Only", "User + System"]:
+            scenario_results = [r for r in self.results if r.prompt_type == scenario]
+            if scenario_results:
+                analysis[scenario] = {
+                    "total_tests": len(scenario_results),
+                    "average_response_time": sum(r.response_time for r in scenario_results)/len(scenario_results),
+                    "average_word_count": sum(r.word_count for r in scenario_results)/len(scenario_results),
+                    "average_character_count": sum(r.character_count for r in scenario_results)/len(scenario_results),
+                    "min_response_time": min(r.response_time for r in scenario_results),
+                    "max_response_time": max(r.response_time for r in scenario_results),
+                    "min_word_count": min(r.word_count for r in scenario_results),
+                    "max_word_count": max(r.word_count for r in scenario_results)
+                }
+        return analysis
+
+    def export_results(self, filename_json="comparative_results.json", filename_csv="comparative_results.csv"):
+        """Export results to JSON and CSV"""
+        data = {
+            "metadata": {
+                "model": "gemini-1.5-flash",
+                "timestamp": datetime.now().isoformat(),
+                "total_tests": len(self.results)
+            },
+            "results": [asdict(r) for r in self.results],
+            "analysis": self.analyze_results()
+        }
+
+        with open(filename_json, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"Results exported to {filename_json}")
+
+        df = pd.DataFrame([asdict(r) for r in self.results])
+        df.to_csv(filename_csv, index=False)
+        print(f"Results exported to {filename_csv}")
+
+# Prompts for testing
+USER_PROMPTS = [
+    "Explain quantum computing in simple terms.",
+    "Write a product review for a smartphone.",
+    "How do I bake a chocolate cake?",
+    "Explain the current economic situation.",
+    "Write a short story about a robot."
+]
+
+SYSTEM_PROMPT = "You are an expert educator and writer. Explain concepts clearly, give examples where applicable, maintain a professional and engaging tone."
+
+async def main():
+    tester = ComparativeTester()
+
+    # Scenario A: User Prompt Only
+    print("\nRunning Scenario A: User Prompt Only...")
+    await tester.run_tests(USER_PROMPTS, system_prompt=None)
+
+    # Scenario B: User + System Prompt
+    print("\nRunning Scenario B: User + System Prompt...")
+    await tester.run_tests(USER_PROMPTS, system_prompt=SYSTEM_PROMPT)
+
+    # Display results
+    tester.display_results()
+
+    # Analyze results
+    analysis = tester.analyze_results()
+    print("\nAnalysis Results by Scenario:")
+    for scenario, stats in analysis.items():
+        print(f"\nScenario: {scenario}")
+        for key, value in stats.items():
+            if isinstance(value, float):
+                print(f"{key}: {value:.3f}")
+            else:
+                print(f"{key}: {value}")
+
+    # Export results
+    tester.export_results()
+
+if __name__ == "__main__":
+    if GOOGLE_API_KEY == "YOUR_GOOGLE_API_KEY_HERE":
+        print("⚠️  Please set your GOOGLE_API_KEY in the code before running!")
+    else:
+        asyncio.run(main())
